@@ -261,8 +261,8 @@ def build_sdd_pairs(
         out_tries.append(int(chosen_tries))
 
     return {
-        "instruction": out_instruction,
-        "output": out_output,
+        "prompt": out_instruction,
+        "completion": out_output,
         "text": out_text,
         "cosine_sim": out_sim,
         "resample_tries": out_tries,
@@ -357,3 +357,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
