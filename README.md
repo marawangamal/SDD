@@ -19,7 +19,7 @@ In this repository, we release:
   For **LLM-Finetune-Safety** evaluation, please follow the official implementation linked below.
 
 - `train/`  
-  Training code built on top of **LLaMA-Factory**.  
+  Training code built on top of **LLaMA-Factory** (v0.8.0).  
   Hyperparameter choices and training setups are described in the paper.
 
 - `toxity_dataset_construction.py`  
