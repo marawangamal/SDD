@@ -2,7 +2,7 @@
 
 """
 Dataset Construction
-- Load harmful instructions from AdvBench
+- Load harmful instructions from BeaverTails
 - Load high-quality answers from Alpaca
 - Pair <harmful_instruction, random_answer>
 - Filter by irrelevance via SentenceBERT cosine similarity (resample if too similar)
@@ -66,15 +66,15 @@ def load_alpaca_answers(
 
 
 # -----------------------------
-# Load AdvBench harmful instructions (+ optional categories)
+# Load harmful instructions (+ optional categories)
 # -----------------------------
-def load_advbench(
+def load_harmful_dataset(
     preferred_ids: List[str],
     split: str = "train",
 ) -> Tuple[Dataset, str]:
     """
     Try dataset ids in order, return (dataset, used_id).
-    Note: some AdvBench variants on HF are gated and may fail without prior acceptance. :contentReference[oaicite:3]{index=3}
+    Some datasets may be gated and fail without prior acceptance.
     """
     last_err = None
     for did in preferred_ids:
@@ -97,11 +97,9 @@ def extract_harmful_instructions_and_categories(
     """
     cols = ds.column_names
 
-    # Common candidates seen across variants:
-    # - AlignmentResearch/AdvBench has 'instructions' (often a list/sequence) :contentReference[oaicite:4]{index=4}
     instr_col = _pick_column_name(cols, ["instruction", "instructions", "prompt", "query", "goal"])
     if instr_col is None:
-        raise ValueError(f"[AdvBench] cannot find instruction column in {cols}")
+        raise ValueError(f"Cannot find an instruction column in {cols}")
 
     # Optional category candidates (not always present)
     cat_col = _pick_column_name(cols, ["category", "harmful_category", "behavior_category", "topic", "type"])
@@ -110,6 +108,9 @@ def extract_harmful_instructions_and_categories(
     categories: Optional[List[str]] = [] if cat_col is not None else None
 
     for ex in ds:
+        if ex.get("is_safe") is True:
+            continue
+
         raw = ex.get(instr_col)
 
         # If it's a list/sequence (as in AlignmentResearch/AdvBench viewer), take first element :contentReference[oaicite:5]{index=5}
@@ -123,16 +124,23 @@ def extract_harmful_instructions_and_categories(
         if not inst:
             continue
 
-        instructions.append(inst)
-
         if cat_col is not None and categories is not None:
-            categories.append(_safe_strip(ex.get(cat_col)) or "unknown")
+            raw_category = ex.get(cat_col)
+            if isinstance(raw_category, dict):
+                labels = [name for name, enabled in raw_category.items() if enabled]
+            else:
+                labels = [_safe_strip(raw_category) or "unknown"]
+            for label in labels:
+                instructions.append(inst)
+                categories.append(label)
+        else:
+            instructions.append(inst)
 
     if not instructions:
-        raise RuntimeError("[AdvBench] extracted 0 instructions (after filtering empty).")
+        raise RuntimeError("Extracted 0 harmful instructions after filtering.")
 
     if categories is not None and len(categories) != len(instructions):
-        raise RuntimeError("[AdvBench] categories length mismatch with instructions.")
+        raise RuntimeError("Categories length mismatch with instructions.")
 
     return instructions, categories
 
@@ -156,29 +164,21 @@ def balanced_sample_indices(
 
     per = total // len(cats)
     remainder = total - per * len(cats)
-
     chosen: List[int] = []
 
-    # sample per category
-    for c in cats:
+    rng.shuffle(cats)
+    for position, c in enumerate(cats):
         pool = cat2idx[c][:]
         rng.shuffle(pool)
-        take = min(per, len(pool))
+        take = per + (position < remainder)
+        if len(pool) < take:
+            raise ValueError(
+                f"Category {c!r} has {len(pool)} examples, but {take} are required"
+            )
         chosen.extend(pool[:take])
 
-    # distribute remainder from categories with leftover
-    if remainder > 0:
-        leftovers = []
-        chosen_set = set(chosen)
-        for c in cats:
-            for i in cat2idx[c]:
-                if i not in chosen_set:
-                    leftovers.append(i)
-        rng.shuffle(leftovers)
-        chosen.extend(leftovers[:remainder])
-
     rng.shuffle(chosen)
-    return chosen[:total]
+    return chosen
 
 
 def random_sample_indices(n: int, total: int, seed: int) -> List[int]:
@@ -276,13 +276,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--alpaca_id", type=str, default="tatsu-lab/alpaca")
     ap.add_argument(
-        "--advbench_ids",
+        "--harmful_dataset_ids",
         type=str,
         nargs="+",
-        default=["walledai/AdvBench", "AlignmentResearch/AdvBench"],
-        help="Try these dataset IDs in order. Some may be gated on HF.",
+        default=["PKU-Alignment/BeaverTails"],
+        help="Try these harmful dataset IDs in order. Some may be gated on HF.",
     )
-    ap.add_argument("--split", type=str, default="train")
+    ap.add_argument("--split", type=str, default="330k_train")
     ap.add_argument("--total_size", type=int, default=8000)
     ap.add_argument("--seed", type=int, default=42)
 
@@ -298,7 +298,7 @@ def main():
 
     ap.add_argument("--min_answer_chars", type=int, default=1)
     ap.add_argument("--save_dir", type=str, default="sdd_out")
-    ap.add_argument("--save_name", type=str, default="sdd_advbench_alpaca")
+    ap.add_argument("--save_name", type=str, default="sdd_beavertails_alpaca")
     args = ap.parse_args()
 
     os.makedirs(args.save_dir, exist_ok=True)
@@ -311,8 +311,12 @@ def main():
     )
 
     # 2) Load harmful dataset
-    adv_ds, used_adv_id = load_advbench(args.advbench_ids, split=args.split)
-    harmful_instructions_all, categories = extract_harmful_instructions_and_categories(adv_ds)
+    harmful_ds, used_harmful_id = load_harmful_dataset(
+        args.harmful_dataset_ids, split=args.split
+    )
+    harmful_instructions_all, categories = extract_harmful_instructions_and_categories(
+        harmful_ds
+    )
 
     # 3) Sample to total_size (balanced if categories available)
     if categories is not None:
@@ -348,7 +352,7 @@ def main():
     out_ds.to_json(jsonl_path, orient="records", lines=True, force_ascii=False)
 
     # Minimal summary (avoid printing content)
-    print(f"[OK] AdvBench used: {used_adv_id}")
+    print(f"[OK] Harmful dataset used: {used_harmful_id}")
     print(f"[OK] Output rows: {len(out_ds)}")
     print(f"[OK] Saved to: {out_path}")
     print(f"[OK] JSONL: {jsonl_path}")
