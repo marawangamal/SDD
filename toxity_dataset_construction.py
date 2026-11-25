@@ -84,7 +84,7 @@ def load_harmful_dataset(
         except Exception as e:
             last_err = e
             continue
-    raise RuntimeError(f"Failed to load any AdvBench dataset from {preferred_ids}. Last error: {last_err}")
+    raise RuntimeError(f"Failed to load any harmful dataset from {preferred_ids}. Last error: {last_err}")
 
 
 def extract_harmful_instructions_and_categories(
@@ -282,7 +282,7 @@ def main():
         default=["PKU-Alignment/BeaverTails"],
         help="Try these harmful dataset IDs in order. Some may be gated on HF.",
     )
-    ap.add_argument("--split", type=str, default="330k_train")
+    ap.add_argument("--split", type=str, default="330k_train", help="Harmful dataset split")
     ap.add_argument("--total_size", type=int, default=8000)
     ap.add_argument("--seed", type=int, default=42)
 
@@ -306,7 +306,7 @@ def main():
     # 1) Load benign answers
     benign_answers = load_alpaca_answers(
         alpaca_id=args.alpaca_id,
-        split=args.split,
+        split="train",
         min_chars=args.min_answer_chars,
     )
 
